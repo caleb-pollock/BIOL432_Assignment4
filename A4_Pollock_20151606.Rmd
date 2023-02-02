@@ -1,0 +1,175 @@
+---
+title: "A4_Pollock_20151606"
+author: "Caleb Pollock"
+date: '2023-02-01'
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tree)
+library(randomForest)
+library(gbm)
+source("https://bit.ly/theme_pub")
+```
+
+# Part 1 - Import Data and View Structure
+
+```{r}
+data <- read.csv("Cohen_CANCERSEEK_liquid_biopsy_2018_modified.csv")
+```
+
+```{r}
+data$Tumor_type <- as.factor(data$Tumor_type) # Tumour is originally coded as a character, re-code as factor with 9 levels
+
+head(data) # See top of data
+str(data) # Observe data structure
+colSums(is.na(data)) # Creates a table with the number of NA values for a given column -> AFP, Angiopoietin_2, AXL, CA_125, CA_15_3, CA19_9, CD44
+
+data <- data %>% # Fix NA in data set
+  mutate(AFP = ifelse(is.na(AFP),
+                      mean(AFP, na.rm=T),AFP),
+         Angiopoietin_2 = ifelse(is.na(Angiopoietin_2),
+                                 mean(Angiopoietin_2, na.rm=T), Angiopoietin_2),
+         AXL = ifelse(is.na(AXL),
+                      mean(AXL, na.rm=T), AXL),
+         CA_125 = ifelse(is.na(CA_125),
+                         mean(CA_125, na.rm = T), CA_125),
+         CA_15_3 = ifelse(is.na(CA_15_3),
+                          mean(CA_15_3, na.rm=T), CA_15_3),
+         CA19_9 = ifelse(is.na(CA19_9),
+                         mean(CA19_9, na.rm = T), CA19_9),
+         CD44 = ifelse(is.na(CD44),
+                       mean(CD44, na.rm = T), CD44))
+
+sum(is.na(data)) # Check and make sure all the NA are removed
+```
+# Quality Control and Necessity of Normalizing Data
+
+To preform quality control on the data set, I first used the structure function to get a preliminary look at the data. Immediately I noticed that Tumour_Type should be a factor, due to its nature of being a categorical variable. After that, I ran a function to determine the number of NAs in each column. After noticing that AFP, Angiopoietin_2, AXL, CA_125, CA_15_3, CA19_9 and CD44 contained NAs, I used the method in last weeks assignment to replace the NAs with the column mean.
+
+It is not necessary to normalize the data for a Random Forest model due to the nature of the technique. Random Forest models are not sensitive to the scale of the data, and can handle variables coded in different units. The model builds so many different decision trees and picks the one with the the greatest accuracy, and scaling the variables can lead to over fitting.
+
+# Dimensions of Final Data frame
+
+```{r}
+dim(data) # Shows the dimensions of the data
+table(data$Tumor_type) # Creates a table showing the number of cancer types
+```
+
+# Number of Normal Samples and Tumour Samples
+
+From the dimension of the data set, we can get the total number of cancer entries, which equals 1804. From the table of Tumour_Type, 800 normal samples are returned. Subtracting the number of normal samples by the total number of samples there are 1004 tumor samples, and 800 normal samples.
+
+# Split Data set
+
+```{r}
+nrow <- nrow(data) 
+trainDat<-data[seq(1,nrow,by=2),] # Select only odds rows
+Validate<-data[seq(2,nrow,by=2),] # Select only even rows
+
+trainDat <- trainDat %>%
+  select(-Patient_ID, -Sample_ID) # Only include the response and predictors
+head(trainDat)
+
+Validate <- Validate %>%
+  select(-Patient_ID, -Sample_ID) # Only include the response and predictors
+head(Validate)
+```
+
+# Part 2 - Decision Tree
+
+```{r}
+trainMod <- tree(Tumor_type ~ ., data = trainDat) # Create the model based on the training data 
+plot(trainMod) # Plot the model
+text(trainMod, cex = 0.70, adj = 0) # Add text to model 
+summary(trainMod) # Summarize the model and provide performance metrics
+```
+# Most Influential Protein Feature
+
+Observing the figure produced above, it is likely that IL_8 is the most important feature in classifying samples. This is because it is the first feature as part of the decision tree and it contains the longest branch length.
+
+# Confusion Matrix
+
+```{r}
+CatDat <- data.frame(Obs = trainDat$Tumor_type, Pred = predict(trainMod, Validate, type = 'class')) # Create a confusion matrix of obs and predicted values
+table(CatDat)
+
+Correct <- CatDat %>% # Calculate the correct classifications
+  filter(Obs==Pred)
+nrow(Correct) / nrow(CatDat)
+
+MisClass <- CatDat %>% # Calculate the mis-classified 
+  filter(Obs!=Pred)
+nrow(MisClass) / nrow(CatDat)
+```
+# Misclassification Rate
+
+The mis-classification rate is 0.424612.
+
+# Cancer Classification Rate
+
+Analyzing the confusion matrix, it appears the decision tree was able to classify normal, colorectum, breast, pancreas, lung, stomach and ovary samples. It appeared to struggle with Esophagus and Liver cancer samples.
+
+# Part 3 - Random Forest
+
+```{r}
+forMod <- randomForest(Tumor_type ~ ., data = trainDat, # Create the random forest 
+                       ntree = 100, mtry = 3, nodesize = 5, importance = TRUE)
+
+forCatDat <- data.frame(Obs = trainDat$Tumor_type, Pred = predict(forMod, Validate, type = 'class')) # Create a confusion matrix of obs and predicted values
+table(forCatDat)
+
+Correct <- forCatDat %>% # Calculate the correct classifications
+  filter(Obs==Pred)
+nrow(Correct) / nrow(CatDat)
+
+MisClass <- forCatDat %>% # Calculate the mis-classified 
+  filter(Obs!=Pred)
+nrow(MisClass) / nrow(CatDat)
+```
+# Random Forest Misclassification Rate
+
+Using the randomForest function improved my mis-classification rate from 47% down to 33%. From the confusion matrix it does appear to have improved the ability to classify the data. 
+
+# Significance Plot
+
+```{r}
+varImpPlot(forMod, cex = 0.65)
+```
+From these plots, it appears that IL-8 is still the most important feature in classifying the different samples. The next important feature is IL-6.
+
+# Combine all tumour types
+
+```{r}
+binDat <- data 
+binDat$binary <- ifelse(binDat$Tumor_type %in% c("Breast", "Colorectum", "Esophagus", "Liver", "Lung", "Ovary", "Pancreas", "Stomach"), "Cancer", "Normal") # Creates the binary data column of cancer or normal
+binDat$binary <- as.factor(binDat$binary) # Codes as factor
+
+binDat <- binDat %>%
+  select(-Patient_ID, -Sample_ID, -Tumor_type)
+
+nrow <- nrow(binDat) 
+binTrain<-binDat[seq(1,nrow,by=2),] # Select only odds rows
+binValidate<-binDat[seq(2,nrow,by=2),] # Select only even rows
+```
+
+# Binary Random Forest
+
+```{r}
+binForMod <- randomForest(binary ~ ., data = binTrain, # Create the random forest 
+                       ntree = 100, mtry = 3, nodesize = 5, importance = TRUE)
+
+binForMod
+
+varImpPlot(binForMod, cex = 0.65)
+```
+# Protein Features for Binary Model
+
+The binary cancer or normal sample model shows that IL_8 and IL_6 are the most important features for classifying blood samples as being cancerous or non cancerous.
+
+This may be due to the fact that IL_8 and IL_6 are both interleukin immune proteins, which are produced during an immune response. It would make sense that the blood samples containing components of an immune response characterizes samples as cancerous or not, as immune cells will be actively engaged with fighting cancer. This means that samples which contain cancer are more likely to contain immune proteins which act to fight the cancer.
+
+Due to the low classification error (0.013 for cancer, 0.095 for normal), I would say that this model does a pretty good job distinguishing between individuals who have cancer, and individuals who do not have any cancerous cells. This may not be a perfect model, but it is much better at detecting differences between cancerous tissues and normal tissues, than distinguishing what type of cancer may be present in the sample.
